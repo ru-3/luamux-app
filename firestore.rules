@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Public read so the Status page works for logged-out visitors.
+    // No client writes — only the Admin SDK (server route, bypasses rules)
+    // is allowed to write health-check records.
+    match /healthChecks/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Internal ping doc used by the health-check job. No client access needed.
+    match /_health/{docId} {
+      allow read, write: if false;
+    }
+
+    // --- your existing rules for users/projects/etc. go below ---
+  }
+}
