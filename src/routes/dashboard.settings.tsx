@@ -1,17 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { useRef, useState, type ChangeEvent } from "react";
+import { useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { updateProfile } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
-import { getDb, getAppStorage } from "@/lib/firebase";
+import { getDb } from "@/lib/firebase";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/dashboard/settings")({
@@ -19,16 +18,39 @@ export const Route = createFileRoute("/dashboard/settings")({
   component: SettingsPage,
 });
 
-const MAX_AVATAR_BYTES = 4 * 1024 * 1024; // 4MB
+/**
+ * Loads `url` as an <img> and resolves only if the browser can actually
+ * decode it as an image. This is a real check — a link to an HTML page, a
+ * 404, or a non-image file will reject — but it doesn't require a Firebase
+ * Storage bucket (which now requires the paid Blaze plan).
+ */
+function validateImageUrl(url: string, timeoutMs = 8000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = "";
+      reject(new Error("Timed out loading that image"));
+    }, timeoutMs);
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("That link doesn't point to a valid image"));
+    };
+    img.src = url;
+  });
+}
 
 function SettingsPage() {
   const { user, signOut, refreshUser } = useAuth();
   const [username, setUsername] = useState(user?.displayName ?? "");
   const [email] = useState(user?.email ?? "");
+  const [avatarUrl, setAvatarUrl] = useState(user?.photoURL ?? "");
   const [notif, setNotif] = useState({ leaks: true, incidents: true, weekly: false });
   const [saving, setSaving] = useState(false);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [savingAvatar, setSavingAvatar] = useState(false);
   const initials = (username || email || "U").slice(0, 2).toUpperCase();
 
   const handleSave = async () => {
@@ -55,42 +77,41 @@ function SettingsPage() {
     }
   };
 
-  const handleAvatarPick = () => fileInputRef.current?.click();
-
-  const handleAvatarChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file || !user) return;
-
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please choose an image file");
-      return;
-    }
-    if (file.size > MAX_AVATAR_BYTES) {
-      toast.error("Image must be under 4MB");
+  const handleSaveAvatar = async () => {
+    if (!user) return;
+    const trimmed = avatarUrl.trim();
+    if (!trimmed) {
+      toast.error("Paste an image link first");
       return;
     }
 
-    setUploadingAvatar(true);
+    let parsed: URL;
     try {
-      const ext = file.name.split(".").pop() || "jpg";
-      const path = `avatars/${user.uid}/avatar.${ext}`;
-      const fileRef = storageRef(getAppStorage(), path);
-      await uploadBytes(fileRef, file, { contentType: file.type });
-      const url = await getDownloadURL(fileRef);
+      parsed = new URL(trimmed);
+    } catch {
+      toast.error("That's not a valid URL");
+      return;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      toast.error("The link must start with http:// or https://");
+      return;
+    }
 
-      await updateProfile(user, { photoURL: url });
+    setSavingAvatar(true);
+    try {
+      await validateImageUrl(trimmed);
+      await updateProfile(user, { photoURL: trimmed });
       await setDoc(
         doc(getDb(), "users", user.uid),
-        { avatarUrl: url, updatedAt: serverTimestamp() },
+        { avatarUrl: trimmed, updatedAt: serverTimestamp() },
         { merge: true },
       );
       await refreshUser();
       toast.success("Avatar updated");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't upload avatar");
+      toast.error(err instanceof Error ? err.message : "Couldn't verify that image");
     } finally {
-      setUploadingAvatar(false);
+      setSavingAvatar(false);
     }
   };
 
@@ -119,22 +140,30 @@ function SettingsPage() {
             </div>
           </div>
         </div>
-        <div className="mt-4 flex gap-2">
+        <div className="mt-4">
           <Button className="glow-sm" onClick={handleSave} disabled={saving}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save
           </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleAvatarChange}
-          />
-          <Button variant="outline" onClick={handleAvatarPick} disabled={uploadingAvatar}>
-            {uploadingAvatar && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Upload new avatar
-          </Button>
+        </div>
+
+        <div className="mt-6 border-t border-white/5 pt-4">
+          <Label>Avatar image link</Label>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Paste a direct link to an image (e.g. from Discord, Imgur). It's checked before being saved.
+          </p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <Input
+              value={avatarUrl}
+              onChange={(e) => setAvatarUrl(e.target.value)}
+              placeholder="https://example.com/avatar.png"
+              className="flex-1"
+            />
+            <Button variant="outline" onClick={handleSaveAvatar} disabled={savingAvatar}>
+              {savingAvatar && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {savingAvatar ? "Checking…" : "Save avatar"}
+            </Button>
+          </div>
         </div>
       </div>
 
