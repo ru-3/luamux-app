@@ -15,6 +15,19 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // --- your existing rules for users/projects/etc. go below ---
+    // Each user can read/write only their own profile doc (username, avatar, plan).
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Obfuscation job records. Written only by the Admin SDK from
+    // /api/jobs (bypasses these rules), never directly by the client.
+    // A signed-in user may only read rows that belong to them.
+    match /jobs/{jobId} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    // --- your existing rules for projects/etc. go below ---
   }
 }
