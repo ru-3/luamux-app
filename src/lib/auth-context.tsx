@@ -23,6 +23,9 @@ export interface AuthContextValue {
   signInWithDiscord: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Re-reads the current user from Firebase Auth so UI relying on
+   *  `user.displayName` / `user.photoURL` re-renders after `updateProfile`. */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -92,6 +95,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fbSignOut(auth);
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    if (!auth.currentUser) return;
+    await auth.currentUser.reload();
+    setUser(auth.currentUser ? ({ ...auth.currentUser } as User) : null);
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -104,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithDiscord,
         resetPassword,
         signOut,
+        refreshUser,
       }}
     >
       {children}
