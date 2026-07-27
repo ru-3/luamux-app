@@ -1,13 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { useRef, useState, type ChangeEvent } from "react";
+import { AlertTriangle, Loader2 } from "lucide-react";
+import { updateProfile } from "firebase/auth";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
+import { getDb, getAppStorage } from "@/lib/firebase";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/dashboard/settings")({
@@ -15,12 +19,80 @@ export const Route = createFileRoute("/dashboard/settings")({
   component: SettingsPage,
 });
 
+const MAX_AVATAR_BYTES = 4 * 1024 * 1024; // 4MB
+
 function SettingsPage() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, refreshUser } = useAuth();
   const [username, setUsername] = useState(user?.displayName ?? "");
   const [email] = useState(user?.email ?? "");
   const [notif, setNotif] = useState({ leaks: true, incidents: true, weekly: false });
+  const [saving, setSaving] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const initials = (username || email || "U").slice(0, 2).toUpperCase();
+
+  const handleSave = async () => {
+    if (!user) return;
+    const trimmed = username.trim();
+    if (!trimmed) {
+      toast.error("Username can't be empty");
+      return;
+    }
+    setSaving(true);
+    try {
+      await updateProfile(user, { displayName: trimmed });
+      await setDoc(
+        doc(getDb(), "users", user.uid),
+        { username: trimmed, updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+      await refreshUser();
+      toast.success("Profile saved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save profile");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAvatarPick = () => fileInputRef.current?.click();
+
+  const handleAvatarChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !user) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file");
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      toast.error("Image must be under 4MB");
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `avatars/${user.uid}/avatar.${ext}`;
+      const fileRef = storageRef(getAppStorage(), path);
+      await uploadBytes(fileRef, file, { contentType: file.type });
+      const url = await getDownloadURL(fileRef);
+
+      await updateProfile(user, { photoURL: url });
+      await setDoc(
+        doc(getDb(), "users", user.uid),
+        { avatarUrl: url, updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+      await refreshUser();
+      toast.success("Avatar updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't upload avatar");
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
@@ -48,8 +120,21 @@ function SettingsPage() {
           </div>
         </div>
         <div className="mt-4 flex gap-2">
-          <Button className="glow-sm" onClick={() => toast.success("Profile saved")}>Save</Button>
-          <Button variant="outline">Upload new avatar</Button>
+          <Button className="glow-sm" onClick={handleSave} disabled={saving}>
+            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Save
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleAvatarChange}
+          />
+          <Button variant="outline" onClick={handleAvatarPick} disabled={uploadingAvatar}>
+            {uploadingAvatar && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Upload new avatar
+          </Button>
         </div>
       </div>
 

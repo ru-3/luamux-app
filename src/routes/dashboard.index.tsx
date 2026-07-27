@@ -1,11 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { ArrowRight, ArrowUpRight, BarChart3, Settings, LifeBuoy } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowRight, ArrowUpRight, BarChart3, Settings, LifeBuoy, FileText, ShieldCheck, Upload } from "lucide-react";
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -13,34 +12,45 @@ import {
   YAxis,
 } from "recharts";
 import { StatusPill } from "@/components/brand/status-pill";
-import { formatNumber, formatRelative } from "@/lib/format";
+import { formatBytes, formatRelative } from "@/lib/format";
 import { useAuth } from "@/lib/auth-context";
+import { fetchUserJobs, totalsForJobs, dailyBytes, type JobRecord } from "@/lib/usage";
 
 export const Route = createFileRoute("/dashboard/")({
   component: DashboardOverview,
 });
 
-const usage = [
-  { d: "Mon", req: 4200, ok: 4100 },
-  { d: "Tue", req: 5100, ok: 4980 },
-  { d: "Wed", req: 6700, ok: 6600 },
-  { d: "Thu", req: 5400, ok: 5300 },
-  { d: "Fri", req: 8300, ok: 8100 },
-  { d: "Sat", req: 9600, ok: 9450 },
-  { d: "Sun", req: 8800, ok: 8710 },
-];
-
-const activity = [
-  { id: 1, type: "login", title: "Signed in from a new device", meta: "Chrome on Windows", ts: Date.now() - 60_000 },
-  { id: 2, type: "settings", title: "Updated account settings", meta: "Profile details changed", ts: Date.now() - 8 * 60_000 },
-  { id: 3, type: "support", title: "Support ticket opened", meta: "Awaiting response", ts: Date.now() - 22 * 60_000 },
-];
-
 function DashboardOverview() {
   const { user } = useAuth();
   const name = user?.displayName ?? user?.email?.split("@")[0] ?? "friend";
+
+  const [jobs, setJobs] = useState<JobRecord[] | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    fetchUserJobs(user.uid)
+      .then(setJobs)
+      .catch(() => setJobs([]));
+  }, [user]);
+
+  const loading = jobs === null;
+  const totals = jobs ? totalsForJobs(jobs) : null;
+  const chartData = jobs ? dailyBytes(jobs, 7) : [];
+  const recent = jobs ? jobs.slice(0, 6) : [];
+
   const stats = [
-    { label: "Requests today", value: "319,200", delta: "+5.4%", accent: true },
+    {
+      label: "Data obfuscated",
+      value: loading ? "…" : formatBytes(totals!.bytesObfuscated),
+      sub: loading ? "" : `${totals!.filesObfuscated} file${totals!.filesObfuscated === 1 ? "" : "s"}`,
+      accent: true,
+    },
+    {
+      label: "Data uploaded",
+      value: loading ? "…" : formatBytes(totals!.bytesUploaded),
+      sub: loading ? "" : `${totals!.filesUploaded} file${totals!.filesUploaded === 1 ? "" : "s"}`,
+      accent: false,
+    },
   ];
 
   return (
@@ -58,15 +68,13 @@ function DashboardOverview() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-1">
+      <div className="grid gap-4 sm:grid-cols-2">
         {stats.map((s) => (
           <div
             key={s.label}
             className={
               "rounded-2xl border p-5 " +
-              (s.accent
-                ? "border-primary/40 bg-primary text-primary-foreground glow"
-                : "border-white/5 bg-card")
+              (s.accent ? "border-primary/40 bg-primary text-primary-foreground glow" : "border-white/5 bg-card")
             }
           >
             <div className="flex items-center justify-between text-xs opacity-80">
@@ -75,7 +83,7 @@ function DashboardOverview() {
             </div>
             <div className="mt-1 flex items-baseline gap-2">
               <span className="font-display text-3xl font-semibold">{s.value}</span>
-              <span className={"text-xs " + (s.accent ? "text-emerald-100" : "text-emerald-400")}>{s.delta}</span>
+              {s.sub && <span className={"text-xs " + (s.accent ? "text-primary-foreground/80" : "text-muted-foreground")}>{s.sub}</span>}
             </div>
           </div>
         ))}
@@ -85,53 +93,63 @@ function DashboardOverview() {
         <div className="rounded-2xl border border-white/5 bg-card p-5">
           <div className="mb-3 flex items-center justify-between">
             <div>
-              <div className="font-display text-lg font-semibold">Usage this week</div>
-              <div className="text-xs text-muted-foreground">Requests vs successful verifications</div>
+              <div className="font-display text-lg font-semibold">Obfuscated this week</div>
+              <div className="text-xs text-muted-foreground">Bytes of output per day</div>
             </div>
             <Link to="/dashboard/analytics" className="text-xs text-primary hover:underline">
               Details <ArrowRight className="inline h-3 w-3" />
             </Link>
           </div>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={usage} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="g-req" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="oklch(0.746 0.132 226.5)" stopOpacity={0.5} />
-                    <stop offset="100%" stopColor="oklch(0.746 0.132 226.5)" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="g-ok" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="oklch(0.75 0.18 154)" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="oklch(0.75 0.18 154)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(1 0 0 / 6%)" />
-                <XAxis dataKey="d" tick={{ fill: "oklch(0.7 0.03 260)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "oklch(0.7 0.03 260)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  contentStyle={{
-                    background: "oklch(0.18 0.02 260)",
-                    border: "1px solid oklch(1 0 0 / 10%)",
-                    borderRadius: 12,
-                    fontSize: 12,
-                  }}
-                />
-                <Area type="monotone" dataKey="req" stroke="oklch(0.746 0.132 226.5)" fill="url(#g-req)" strokeWidth={2} />
-                <Area type="monotone" dataKey="ok" stroke="oklch(0.75 0.18 154)" fill="url(#g-ok)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {!loading && totals!.filesObfuscated === 0 ? (
+            <div className="flex h-64 items-center justify-center text-center text-sm text-muted-foreground">
+              No jobs recorded yet. Once the obfuscator reports finished jobs, your weekly usage will show up here.
+            </div>
+          ) : (
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="g-req" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="oklch(0.746 0.132 226.5)" stopOpacity={0.5} />
+                      <stop offset="100%" stopColor="oklch(0.746 0.132 226.5)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="oklch(1 0 0 / 6%)" />
+                  <XAxis dataKey="day" tick={{ fill: "oklch(0.7 0.03 260)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fill: "oklch(0.7 0.03 260)", fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v) => formatBytes(Number(v))}
+                    width={64}
+                  />
+                  <Tooltip
+                    formatter={(v: number) => formatBytes(v)}
+                    contentStyle={{
+                      background: "oklch(0.18 0.02 260)",
+                      border: "1px solid oklch(1 0 0 / 10%)",
+                      borderRadius: 12,
+                      fontSize: 12,
+                    }}
+                  />
+                  <Area type="monotone" dataKey="bytes" stroke="oklch(0.746 0.132 226.5)" fill="url(#g-req)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
 
         <div className="rounded-2xl border border-white/5 bg-card p-5">
           <div className="mb-3 flex items-center justify-between">
-            <div className="font-display text-lg font-semibold">Quick actions</div>
+            <div className="font-display text-lg font-semibold">Quick links</div>
           </div>
           <div className="grid gap-2">
             {[
               { icon: BarChart3, label: "View analytics", to: "/dashboard/analytics" },
               { icon: Settings, label: "Account settings", to: "/dashboard/settings" },
               { icon: LifeBuoy, label: "Contact support", to: "/dashboard/support" },
+              { icon: FileText, label: "Terms & conditions", to: "/terms" },
+              { icon: ShieldCheck, label: "Privacy policy", to: "/privacy" },
             ].map((a) => (
               <Link
                 key={a.label}
@@ -153,38 +171,35 @@ function DashboardOverview() {
 
       <div className="rounded-2xl border border-white/5 bg-card p-5">
         <div className="mb-3 flex items-center justify-between">
-          <div className="font-display text-lg font-semibold">Recent activity</div>
-          <div className="text-xs text-muted-foreground">Last 24 hours</div>
+          <div className="font-display text-lg font-semibold">Recent jobs</div>
+          <div className="text-xs text-muted-foreground">Latest first</div>
         </div>
-        <ul className="space-y-3">
-          {activity.map((a) => (
-            <li key={a.id} className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm">{a.title}</div>
-                <div className="text-xs text-muted-foreground">{a.meta}</div>
-              </div>
-              <div className="whitespace-nowrap text-[11px] text-muted-foreground">{formatRelative(a.ts)}</div>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="rounded-2xl border border-white/5 bg-card p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="font-display text-lg font-semibold">Requests per hour</div>
-          <div className="text-xs text-muted-foreground">Live • {formatNumber(942)} req/s peak</div>
-        </div>
-        <div className="h-48">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={Array.from({ length: 24 }, (_, i) => ({ h: `${i}:00`, v: 200 + Math.round(Math.sin(i / 2) * 120 + Math.random() * 80) }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="oklch(1 0 0 / 6%)" />
-              <XAxis dataKey="h" tick={{ fill: "oklch(0.7 0.03 260)", fontSize: 10 }} axisLine={false} tickLine={false} interval={2} />
-              <YAxis tick={{ fill: "oklch(0.7 0.03 260)", fontSize: 10 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: "oklch(0.18 0.02 260)", border: "1px solid oklch(1 0 0 / 10%)", borderRadius: 12, fontSize: 12 }} />
-              <Bar dataKey="v" radius={[6, 6, 0, 0]} fill="oklch(0.746 0.132 226.5)" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+        {loading ? (
+          <div className="text-sm text-muted-foreground">Loading…</div>
+        ) : recent.length === 0 ? (
+          <div className="text-sm text-muted-foreground">
+            No jobs recorded yet. This list fills in as soon as the bot/API reports finished obfuscation jobs.
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {recent.map((j) => (
+              <li key={j.id} className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <Upload className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <div className="text-sm">{j.fileName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatBytes(j.bytesIn)} → {j.ok ? formatBytes(j.bytesOut) : "failed"}
+                    </div>
+                  </div>
+                </div>
+                <div className="whitespace-nowrap text-[11px] text-muted-foreground">{formatRelative(j.ts)}</div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </motion.div>
   );
